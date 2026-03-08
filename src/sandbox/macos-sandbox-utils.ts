@@ -193,6 +193,16 @@ function generateMoveBlockingRules(
 
 /**
  * Generate filesystem read rules for sandbox profile
+ *
+ * Supports two layers:
+ * 1. denyOnly: deny reads from these paths (broad regions like /Users)
+ * 2. allowWithinDeny: re-allow reads within denied regions (like CWD)
+ *    allowWithinDeny takes precedence over denyOnly.
+ *
+ * In Seatbelt profiles, later rules take precedence, so we emit:
+ *   (allow file-read*)        ← default: allow everything
+ *   (deny file-read* ...)     ← deny broad regions
+ *   (allow file-read* ...)    ← re-allow specific paths within denied regions
  */
 function generateReadRules(
   config: FsReadRestrictionConfig | undefined,
@@ -225,6 +235,24 @@ function generateReadRules(
         `(deny file-read*`,
         `  (subpath ${escapePath(normalizedPath)})`,
         `  (with message "${logTag}"))`,
+      )
+    }
+  }
+
+  // Re-allow specific paths within denied regions (allowWithinDeny takes precedence)
+  for (const pathPattern of config.allowWithinDeny || []) {
+    const normalizedPath = normalizePathForSandbox(pathPattern)
+
+    if (containsGlobChars(normalizedPath)) {
+      const regexPattern = globToRegex(normalizedPath)
+      rules.push(
+        `(allow file-read*`,
+        `  (regex ${escapePath(regexPattern)}))`,
+      )
+    } else {
+      rules.push(
+        `(allow file-read*`,
+        `  (subpath ${escapePath(normalizedPath)}))`,
       )
     }
   }
@@ -658,7 +686,10 @@ export function wrapCommandWithSandboxMacOS(
   // Determine if we have restrictions to apply
   // Read: denyOnly pattern - empty array means no restrictions
   // Write: allowOnly pattern - undefined means no restrictions, any config means restrictions
-  const hasReadRestrictions = readConfig && readConfig.denyOnly.length > 0
+  const hasReadRestrictions =
+    readConfig &&
+    (readConfig.denyOnly.length > 0 ||
+      (readConfig.allowWithinDeny?.length ?? 0) > 0)
   const hasWriteRestrictions = writeConfig !== undefined
 
   // No sandboxing needed
